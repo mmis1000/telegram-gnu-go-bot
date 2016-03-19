@@ -42,7 +42,7 @@ api.on('message', function (message) {
       return api.sendMessage(message.chat.id, 'please exit current game')
     }
     var params = text
-      .replace(/^\/new(@[^\s])?\s*/, '')
+      .replace(/^\/new(@[^\s]+)?\s*/, '')
       .replace(/\s+/g, ' ')
       .replace(/^\s+|\s+$/, '')
       .split(/\s/g)
