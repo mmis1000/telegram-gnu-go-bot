@@ -129,6 +129,7 @@ api.on('message', function (message) {
     if (!sess.board) {
       return api.sendMessage(message.chat.id, 'curruntly no game is playing')
     }
+    sess.isRunning = false;
     sess.board.destroy();
     delete sess.board;
     return api.sendMessage(message.chat.id, 'game quited')
