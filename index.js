@@ -144,6 +144,7 @@ api.on('message', function (message) {
       } else {
         sess.board.invoke('final_score')
         .then(function (status) {
+          if (!sess.board) {return}
           api.sendMessage(message.chat.id, 'game ended: ' + status.responseText);
           sess.passCount = 0;
           sess.isRunning = false;
