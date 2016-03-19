@@ -1,0 +1,3 @@
+module.exports = {
+    token: '000000000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+}
