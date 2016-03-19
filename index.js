@@ -82,7 +82,7 @@ api.on('message', function (message) {
     var temp;
     var white_last_action = null;
     var estimate_score = null
-    if (sess.isRunning) {
+    if (sess.isRunning || sess.passCount >= 2) {
       return api.sendMessage(message.chat.id, 'please wait for current action to be finished');
     }
     sess.isRunning = true;
@@ -91,10 +91,28 @@ api.on('message', function (message) {
     } else {
       temp = sess.board.move('black', position)
     }
+    if (position === 'pass') {
+      sess.passCount = sess.passCount || 0;
+      sess.passCount += 1;
+    } else {
+      sess.passCount = 0;
+    }
     temp.then(function () {
       return sess.board.compute('white');
     })
     .then(function (status) {
+      
+      if (status.responseText === 'PASS') {
+        sess.passCount = sess.passCount || 0;
+        sess.passCount += 1;
+      } else {
+        sess.passCount = 0;
+      }
+      if (sess.passCount >= 2) {
+        var err = new Error('game ended')
+        err.type = 'end_game';
+        throw err;
+      }
       white_last_action = status.responseText
       // api.sendMessage(message.chat.id, 'last action of white: ' + status.responseText);
       return sess.board.invoke('estimate_score')
@@ -120,8 +138,19 @@ api.on('message', function (message) {
       sess.isRunning = false;
     })
     .catch(function (status) {
-      sess.isRunning = false;
-      api.sendMessage(message.chat.id, 'error: ' + status.responseText);
+      if (status.type !== "end_game") {
+        sess.isRunning = false;
+        api.sendMessage(message.chat.id, 'error: ' + status.responseText);
+      } else {
+        sess.board.invoke('final_score')
+        .then(function (status) {
+          api.sendMessage(message.chat.id, 'game ended: ' + status.responseText);
+          sess.passCount = 0;
+          sess.isRunning = false;
+          sess.board.destroy();
+          delete sess.board;
+        })
+      }
     })
   }
   
@@ -129,6 +158,7 @@ api.on('message', function (message) {
     if (!sess.board) {
       return api.sendMessage(message.chat.id, 'curruntly no game is playing')
     }
+    sess.passCount = 0;
     sess.isRunning = false;
     sess.board.destroy();
     delete sess.board;
