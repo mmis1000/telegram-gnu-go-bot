@@ -2,6 +2,10 @@ var TelegramAPI = require("./lib/tgapi");
 var Board = require("./lib/board");
 var drawBoard = require("./lib/drawboard");
 
+var Temp = require('temp');
+var fs = require('fs');
+Temp.track();
+
 var api = new TelegramAPI(require("./config").token);
 
 var sessionPool = {};
@@ -36,7 +40,111 @@ api.getMe(function (data) {
 api.on('message', function (message) {
   var sess = getSession(message.chat.id);
   var text = message.text;
+  
+  if (sess.waitSGF && message.document) {
+    // load sgf data as a game
+    sess.isRunning = true;
+    console.log('got sgf file');
+    sess.waitSGF = false;
+    api.getFile(message.document.file_id, function (err, res) {
+      if (err) {
+        sess.isRunning = false;
+        return api.sendMessage(message.chat.id, 'error duting load SGF')
+      }
+      api.getFileContent(res.file_path, function (err, res, body) {
+        if (err) {
+          sess.isRunning = false;
+          return api.sendMessage(message.chat.id, 'error duting load SGF')
+        }
+        Temp.open({suffix: '.sgf'}, function(err, info) {
+          if (err) {
+            sess.isRunning = false;
+            return api.sendMessage(message.chat.id, 'error duting load SGF')
+          } else {
+            fs.write(info.fd, body, 0, body.length);
+            fs.close(info.fd, function(err) {
+              sess.isRunning = false;
+              if (err) {
+                return api.sendMessage(message.chat.id, 'error duting load SGF')
+              }
+              // info.path
+              console.log('temp file at ', info.path)
+              sess.board = new Board(['--infile', info.path].concat(sess.loadParams));
+              sess.board.on('rpl', function (obj) {
+                console.log(obj)
+              })
+              sess.board.on('error', function (err) {
+                api.sendMessage(message.chat.id, err.stack ? err.stack : err.toString)
+              })
+              sess.board.on('exit', function (code) {
+                if (!sess.board) {
+                  return;
+                }
+                sess.passCount = 0;
+                sess.isRunning = false;
+                sess.board.destroy();
+                delete sess.board;
+                if (code != 0) {
+                  api.sendMessage(message.chat.id, 'bot exit unexpectedly with code ' + code);
+                }
+              });
+              api.sendMessage(message.chat.id, 'game continuing...')
+              sess.board.showBoard()
+              .then(function (obj) {
+                var buffer = drawBoard(obj.board);
+                // console.log(buffer);
+                api.sendPhoto(message.chat.id, {
+                  value:  buffer,
+                  options: {
+                    filename: 'go.png',
+                    contentType: 'image/png'
+                  }
+                }, {}, function (data) {
+                  console.log(data)
+                });
+              })
+              .catch(function (err) {
+                console.log(err);
+              })
+            });
+          }
+        });
+      })
+    })
+  }
   if (!text) return;
+  if (text.match(/^\/load(@|$|\s)/)) {
+    if (sess.board) {
+      return api.sendMessage(message.chat.id, 'please exit current game')
+    }
+    
+    var params = text
+      .replace(/^\/load(@[^\s]+)?\s*/, '')
+      .replace(/\s+/g, ' ')
+      .replace(/^\s+|\s+$/, '')
+      .split(/\s/g)
+      .filter(function (i) {return !!i});
+    
+    sess.loadParams = params
+    sess.waitSGF = true;
+    api.sendMessage(message.chat.id, 'now send me the sgf file', null, {
+      reply_to_message_id: message.message_id,
+      reply_markup: JSON.stringify({
+        force_reply: true,
+        selective: true
+      })
+    })
+  }
+  if (text.match(/^\/cancel(@|$|\s)/)) {
+    sess.waitSGF = false;
+    api.sendMessage(message.chat.id, 'keyboard closed', null, {
+      reply_to_message_id: message.message_id,
+      reply_markup: JSON.stringify({
+        hide_keyboard: true,
+        selective: true
+      })
+    })
+  }
   if (text.match(/^\/new(@|$|\s)/)) {
     if (sess.board) {
       return api.sendMessage(message.chat.id, 'please exit current game')
@@ -51,11 +159,24 @@ api.on('message', function (message) {
     sess.board = new Board(params)
     sess.board.on('rpl', function (obj) {
       console.log(obj)
-    })
+    });
     sess.board.on('error', function (err) {
-      api.sendMessage(message.chat.id, err)
-    })
-    api.sendMessage(message.chat.id, 'game start')
+      api.sendMessage(message.chat.id, err.stack ? err.stack : err.toString)
+    });
+    sess.board.on('exit', function (code) {
+      if (!sess.board) {
+        return;
+      }
+      sess.passCount = 0;
+      sess.isRunning = false;
+      sess.board.destroy();
+      delete sess.board;
+      if (code != 0) {
+        api.sendMessage(message.chat.id, 'bot exit unexpectedly with code ' + code);
+      }
+    });
+    api.sendMessage(message.chat.id, 'game start');
+    
     sess.board.showBoard()
     .then(function (obj) {
       var buffer = drawBoard(obj.board);
@@ -146,6 +267,26 @@ api.on('message', function (message) {
         .then(function (status) {
           if (!sess.board) {return}
           api.sendMessage(message.chat.id, 'game ended: ' + status.responseText);
+          return sess.board.invoke('printsgf');
+        })
+        .then(function (res) {
+          
+          api.sendDocument(message.chat.id, {
+            value: res.responseText,
+            options: {
+              filename: message.chat.id + '_' + Date.now() + '.sgf',
+              contentType: 'text/plain'
+            }
+          })
+          /*
+          api.sendMessage(
+            message.chat.id, 
+            '```\r\n===begin sgf data===\r\n' + res.responseText + '\r\n===end sgf data===\r\n```', 
+            null, 
+            {
+              parse_mode: 'Markdown'      
+            }
+          );*/
           sess.passCount = 0;
           sess.isRunning = false;
           sess.board.destroy();
@@ -154,26 +295,75 @@ api.on('message', function (message) {
       }
     })
   }
-  
-  if (text.match(/^\/exit(@|$)/)) {
+  if (text.match(/^\/export(@|$)/)) {
     if (!sess.board) {
       return api.sendMessage(message.chat.id, 'curruntly no game is playing')
     }
-    sess.passCount = 0;
-    sess.isRunning = false;
-    sess.board.destroy();
-    delete sess.board;
-    return api.sendMessage(message.chat.id, 'game quited')
+    sess.board.invoke('printsgf')
+    .then(function (res) {
+      
+      api.sendDocument(message.chat.id, {
+        value: res.responseText,
+        options: {
+          filename: message.chat.id + '_' + Date.now() + '.sgf',
+          contentType: 'text/plain'
+        }
+      })
+      /*
+      api.sendMessage(
+        message.chat.id, 
+        '```\r\n===begin sgf data===\r\n' + res.responseText + '\r\n===end sgf data===\r\n```', 
+        null, 
+        {
+          parse_mode: 'Markdown'      
+        }
+      );*/
+    })
+  }
+  if (text.match(/^\/exit(@|$)/)) {
+    if (!sess.board) {
+      sess.passCount = 0;
+      sess.isRunning = false;
+      return api.sendMessage(message.chat.id, 'curruntly no game is playing')
+    }
+    sess.isRunning = true;
+    sess.board.invoke('printsgf')
+    .then(function (res) {
+      if (!sess.board) {
+        return
+      }
+      api.sendMessage(
+        message.chat.id, 
+        'game quited');
+      api.sendDocument(message.chat.id, {
+        value: res.responseText,
+        options: {
+          filename: message.chat.id + '_' + Date.now() + '.sgf',
+          contentType: 'text/plain'
+        }
+      })
+      sess.passCount = 0;
+      sess.isRunning = false;
+      sess.board.destroy();
+      delete sess.board;
+    })
   }
   if (text.match(/^\/help(@|$|\s)/)) {
     return api.sendMessage(message.chat.id, `
 Hello, I am gnu go bot.
 I can play go with you.
 To start a game.
-Type \`/new\`
-Or with some gnugo parameter.
-For example:
-  \`/new --level 1 --boardsize 13\`
+  Type \`/new\`
+  Or with some gnugo parameter.
+  For example:
+    \`/new --level 1 --boardsize 13\`
+To continue a game
+  Type \`/load\`
+  or with some arguments
+  \`/new --level 1\`
+  then send the sgf file to the bot as document
+To save a game
+  Type \`export\`
 To place the stones
   Type \`/A1\` - \`/T19\`
 To pass
