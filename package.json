@@ -9,6 +9,7 @@
   "author": "mmis1000@yahoo.com.tw",
   "license": "MIT",
   "dependencies": {
+    "canvas": "^1.3.12",
     "q": "^1.4.1",
     "request": "^2.69.0",
     "temp": "^0.8.3"
