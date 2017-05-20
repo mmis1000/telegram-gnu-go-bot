@@ -1,0 +1,8 @@
+{
+  "apps" : [{
+    "name" : "gnu_go_bot",
+    "script" : "./index.js",
+    "watch" : true,
+    "exec_mode" : "fork"
+  }]
+}
